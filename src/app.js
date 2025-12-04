@@ -51,8 +51,19 @@ import kycRoutes from "./routes/kyc.js";
 app.use("/api/kyc", kycRoutes);
 
 import accountRoutes from "./routes/accountRoutes.js";
-
 app.use("/api/account", accountRoutes);
+
+import virtualCardRoutes from "./routes/virtualCardRoutes.js";
+app.use("/api/virtual-cards", virtualCardRoutes);
+
+import transferRoutes from "./routes/transferRoutes.js";
+app.use("/api/transfer", transferRoutes);
+
+import internationalWireRoutes from "./routes/internationalWireRoutes.js";
+app.use("/api/wire", internationalWireRoutes);
+
+
+
 
 
 app.use("/api/user", userRoutes);

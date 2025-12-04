@@ -18,6 +18,7 @@
 //   }
 // };
 import User from "../models/User.js";
+import Account from "../models/Account.js";
 
 export const acceptKycTerms = async (req, res) => {
   try {
@@ -43,3 +44,40 @@ export const acceptKycTerms = async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 };
+
+
+export const getMeSidebar = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    const user = await User.findById(userId).select("personalInfo kyc");
+    const account = await Account.findOne({ user: userId }).select("accountNumber");
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const fullName = `${user.personalInfo.legalFirstName} ${
+      user.personalInfo.middleName || ""
+    } ${user.personalInfo.legalLastName}`.trim();
+
+    const initials = fullName
+      .split(" ")
+      .map((n) => n[0])
+      .join("")
+      .toUpperCase();
+
+    return res.json({
+      fullName,
+      initials,
+      accountNumber: account?.accountNumber || null,
+      balance: account?.balances?.usd?.available || 0,
+      kycCompleted: user.kyc?.status?.approved || false,
+    });
+
+  } catch (e) {
+    console.log("GET SIDEBAR ERROR:", e);
+    return res.status(500).json({ error: e.message });
+  }
+};
+
