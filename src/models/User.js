@@ -211,6 +211,11 @@ const UserSchema = new mongoose.Schema({
   hasAcceptedTerms: { type: Boolean, default: false },
   kycCompleted: { type: Boolean, default: false },
 
+avatarUrl: { type: String, default: null },     // public URL served to client
+  avatarKey: { type: String, default: null },     // local filename (or cloud key)
+  // ...
+
+
   lastLoginAt: { type: Date },
   createdBy:   { type: String, default: "self" },
 

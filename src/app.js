@@ -62,6 +62,12 @@ app.use("/api/transfer", transferRoutes);
 import internationalWireRoutes from "./routes/internationalWireRoutes.js";
 app.use("/api/wire", internationalWireRoutes);
 
+import  profileRoutes from "./routes/profileRoutes.js";
+app.use("/api/profile", profileRoutes);
+
+
+import depositRoutes from "./routes/depositRoutes.js"
+app.use("/api/deposit", depositRoutes);
 
 
 

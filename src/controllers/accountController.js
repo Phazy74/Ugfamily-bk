@@ -89,3 +89,37 @@ export const getAccountOverview = async (req, res) => {
     return res.status(500).json({ error: e.message });
   }
 };
+export const getUserInfo = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    const user = await User.findById(userId).select(
+      "personalInfo contactDetail kyc accountSetup"
+    );
+
+    const account = await Account.findOne({ user: userId });
+
+    if (!user || !account) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const fullName =
+      `${user.personalInfo.legalFirstName} ${user.personalInfo.middleName} ${user.personalInfo.legalLastName}`.trim();
+
+    return res.json({
+      user: {
+        firstName: user.personalInfo.legalFirstName,
+        lastName: user.personalInfo.legalLastName,
+        email: user.contactDetail.email,
+        country: user.contactDetail.country,
+
+        fullName,
+        accountNumber: account.accountNumber,
+        avatar: user.avatar || null,
+      },
+    });
+  } catch (e) {
+    console.error("USER INFO ERROR:", e);
+    res.status(500).json({ error: e.message });
+  }
+};
