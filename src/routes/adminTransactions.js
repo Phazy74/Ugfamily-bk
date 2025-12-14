@@ -87,46 +87,34 @@ router.delete("/transaction/:id", adminAuth, async (req, res) => {
  */
 router.put("/transaction/:id/date", adminAuth, async (req, res) => {
   try {
-    const { date } = req.body;
+    const { transactionDate } = req.body;
 
-    if (!date) {
-      return res.status(400).json({
-        success: false,
-        message: "Date is required",
-      });
+    if (!transactionDate) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Date is required" });
     }
 
     const tx = await Transaction.findByIdAndUpdate(
       req.params.id,
-      {
-        $set: { createdAt: new Date(date) },
-      },
-      {
-        new: true,
-        timestamps: false, // 🔴 VERY IMPORTANT
-      }
+      { transactionDate: new Date(transactionDate) },
+      { new: true }
     );
 
     if (!tx) {
-      return res.status(404).json({
-        success: false,
-        message: "Transaction not found",
-      });
+      return res
+        .status(404)
+        .json({ success: false, message: "Transaction not found" });
     }
 
-    res.json({
-      success: true,
-      message: "Transaction date updated",
-      transaction: tx,
-    });
+    res.json({ success: true, transaction: tx });
   } catch (e) {
     console.error("ADMIN UPDATE TX DATE ERROR:", e);
-    res.status(500).json({
-      success: false,
-      message: "Server error",
-    });
+    res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
+
 
 
 export default router;
