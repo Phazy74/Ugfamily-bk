@@ -9,7 +9,7 @@ router.get("/", requireAuth, async (req, res) => {
     const userId = req.user.userId;
 
     const transactions = await Transaction.find({ user: userId })
-      .sort({ createdAt: -1 });
+      .sort({ transactionDate: -1, createdAt: -1 });
 
     res.json({ transactions });
 
