@@ -6,6 +6,24 @@ import cloudinary from "../config/cloudinary.js";
 
 const router = express.Router();
 
+// 1. THIS IS THE NEW ROUTE WE ADDED TO FETCH THE USER'S NAME
+router.get("/profile", requireAuth, async (req, res) => {
+  try {
+    // req.user.userId comes from your requireAuth middleware
+    const user = await User.findById(req.user.userId);
+    
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    res.json({ success: true, user });
+  } catch (error) {
+    console.error("GET PROFILE ERROR:", error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+// 2. THIS IS YOUR EXISTING UPLOAD ROUTE
 router.post(
   "/upload-profile",
   requireAuth,

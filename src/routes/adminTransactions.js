@@ -42,8 +42,6 @@ router.get("/transactions", adminAuth, async (req, res) => {
   }
 });
 
-
-
 router.put("/transaction/:id/status", adminAuth, async (req, res) => {
   try {
     const { status } = req.body;
@@ -96,18 +94,14 @@ router.put("/transaction/:id/date", adminAuth, async (req, res) => {
       });
     }
 
-    const tx = await Transaction.findByIdAndUpdate(
-      req.params.id,
-      {
-        $set: { createdAt: new Date(date) },
-      },
-      {
-        new: true,
-        timestamps: false, // 🔴 VERY IMPORTANT
-      }
+    // 🔴 We use updateOne() with overwriteImmutable to forcefully bypass Mongoose's date lock
+    const result = await Transaction.updateOne(
+      { _id: req.params.id },
+      { $set: { createdAt: new Date(date) } },
+      { timestamps: false, strict: false, overwriteImmutable: true }
     );
 
-    if (!tx) {
+    if (result.matchedCount === 0) {
       return res.status(404).json({
         success: false,
         message: "Transaction not found",
@@ -116,8 +110,7 @@ router.put("/transaction/:id/date", adminAuth, async (req, res) => {
 
     res.json({
       success: true,
-      message: "Transaction date updated",
-      transaction: tx,
+      message: "Transaction date forcefully updated",
     });
   } catch (e) {
     console.error("ADMIN UPDATE TX DATE ERROR:", e);
@@ -127,6 +120,36 @@ router.put("/transaction/:id/date", adminAuth, async (req, res) => {
     });
   }
 });
+/**
+ * UPDATE TRANSACTION DESCRIPTION (NEW)
+ */
+router.put("/transaction/:id/description", adminAuth, async (req, res) => {
+  try {
+    const { description } = req.body;
 
+    const tx = await Transaction.findById(req.params.id);
+    if (!tx) {
+      return res.status(404).json({
+        success: false,
+        message: "Transaction not found",
+      });
+    }
+
+    tx.description = description;
+    await tx.save();
+
+    res.json({
+      success: true,
+      message: "Transaction description updated",
+      transaction: tx,
+    });
+  } catch (e) {
+    console.error("ADMIN UPDATE TX DESCRIPTION ERROR:", e);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+});
 
 export default router;
