@@ -7,7 +7,7 @@ import { requireAuth } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-router.post("/verify", requireAuth , verifyInternationalBeneficiary);
-router.post("/send", requireAuth , sendInternationalWire);
+router.post("/verify", requireAuth, verifyInternationalBeneficiary);
+router.post("/send", requireAuth, sendInternationalWire);
 
 export default router;

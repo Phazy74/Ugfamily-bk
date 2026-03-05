@@ -1,5 +1,6 @@
 import InternationalWire from "../models/InternationalWire.js";
 import Account from "../models/Account.js";
+import Transaction from "../models/Transaction.js"; 
 import { generateReference } from "../utils/refGenerator.js";
 
 export const sendInternationalWire = async (req, res) => {
@@ -16,7 +17,7 @@ export const sendInternationalWire = async (req, res) => {
     if (!account) return res.status(404).json({ error: "Account not found" });
 
     if (account.balances.usd.available < totalDebit)
-      return res.status(400).json({ error: "Insufficient balance" });
+      return res.status(400).json({ error: "Insufficient balance (including $25 fee)" });
 
     // deduct
     account.balances.usd.available -= totalDebit;
@@ -39,13 +40,26 @@ export const sendInternationalWire = async (req, res) => {
       status: "pending",
     });
 
+    // 🔴 FIXED THIS SECTION: "type" is now "transfer" so Mongoose accepts it!
+    await Transaction.create({
+      user: userId,
+      type: "transfer", // <--- THIS WAS THE PROBLEM! Changed from "wire transfer" to "transfer"
+      direction: "debit",
+      amount: totalDebit, 
+      status: "pending", 
+      reference: reference,
+      description: `Wire Transfer to ${recipientName} (${bankName})`
+    });
+
     return res.json({
+      success: true,
       message: "Wire transfer submitted",
       reference,
       transfer
     });
 
   } catch (e) {
+    console.error("WIRE TRANSFER ERROR:", e);
     return res.status(500).json({ error: e.message });
   }
 };
@@ -69,4 +83,3 @@ export const verifyInternationalBeneficiary = async (req, res) => {
     return res.status(500).json({ error: e.message });
   }
 };
-
