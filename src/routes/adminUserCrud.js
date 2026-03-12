@@ -8,10 +8,11 @@ import Account from "../models/Account.js";
 
 const router = express.Router();
 
-
 function generateReference() {
   return "TRX-" + Date.now() + "-" + Math.floor(Math.random() * 100000);
 }
+
+// ---- ADJUST WALLET BALANCE ----
 router.post("/:id/wallet/adjust", adminAuth, async (req, res) => {
   try {
     const { amount, action, currency = "usd" } = req.body;
@@ -70,9 +71,7 @@ router.post("/:id/wallet/adjust", adminAuth, async (req, res) => {
   }
 });
 
-/* -----------------------------------------------
-   ⭐ 2. TRANSACTION HISTORY ALSO BEFORE /:id ⭐
------------------------------------------------- */
+// ---- ADD CUSTOM TRANSACTION ----
 router.post("/:id/transaction", adminAuth, async (req, res) => {
   try {
     const { type, direction, amount, currency = "usd", description } = req.body;
@@ -94,7 +93,7 @@ router.post("/:id/transaction", adminAuth, async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid currency" });
     }
 
-    // ---- UPDATE BALANCE ----
+    // UPDATE BALANCE
     if (direction === "credit") {
       balance.available += amt;
       balance.ledger += amt;
@@ -110,13 +109,13 @@ router.post("/:id/transaction", adminAuth, async (req, res) => {
 
     await account.save();
 
-    // ---- CREATE TRANSACTION ----
-    const reference = "TRX-" + Date.now() + "-" + Math.floor(Math.random() * 10000);
+    // CREATE TRANSACTION
+    const reference = generateReference();
 
     const tx = await Transaction.create({
       user: userId,
-      type,          // deposit | transfer | card | custom
-      direction,     // credit | debit
+      type,          
+      direction,     
       amount: amt,
       status: "success",
       currency,
@@ -137,20 +136,20 @@ router.post("/:id/transaction", adminAuth, async (req, res) => {
   }
 });
 
+// ---- LIST ALL USERS ----
 router.get("/list", adminAuth, async (req, res) => {
   try {
     const search = req.query.search || "";
 
     const query = search
       ? {
-          $or: [
+          $or:[
             { "personalInfo.username": { $regex: search, $options: "i" } },
             { "contactDetail.email": { $regex: search, $options: "i" } }
           ]
         }
       : {};
 
-    // Fetch users only with needed fields
     const users = await User.find(query).select(
       "personalInfo contactDetail status account balances"
     );
@@ -162,30 +161,29 @@ router.get("/list", adminAuth, async (req, res) => {
   }
 });
 
-// GET ALL TRANSACTIONS FOR ONE USER (ADMIN)
-// GET ALL TRANSACTIONS FOR ONE USER (ADMIN)
+// ⭐ FIXED: GET ALL TRANSACTIONS FOR ONE USER ⭐
 router.get("/:id/transactions", adminAuth, async (req, res) => {
   try {
     const userId = req.params.id;
 
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
-
     const skip = (page - 1) * limit;
 
+    // 🔴 FIXED THIS: Changed { userId } to { user: userId } to match your database schema
     const [items, total] = await Promise.all([
-      Transaction.find({ userId })
+      Transaction.find({ user: userId })
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit),
-      Transaction.countDocuments({ userId })
+      Transaction.countDocuments({ user: userId })
     ]);
 
     return res.json({
       success: true,
       items,
       page,
-      pages: Math.ceil(total / limit),
+      pages: Math.ceil(total / limit) || 1,
       total
     });
 
@@ -195,8 +193,7 @@ router.get("/:id/transactions", adminAuth, async (req, res) => {
   }
 });
 
-
-
+// ---- CREATE USER ----
 router.post("/", adminAuth, async (req, res) => {
   try {
     const { personalInfo, contactDetail, accountSetup, security, createdBy = "admin" } = req.body;
@@ -208,13 +205,11 @@ router.post("/", adminAuth, async (req, res) => {
       });
     }
 
-    // Hash values
     const passwordHash = await bcrypt.hash(String(security.password), 12);
     const transactionPinHash = await bcrypt.hash(String(security.transactionPin), 12);
 
-    // Unique check
     const clash = await User.findOne({
-      $or: [
+      $or:[
         { "contactDetail.email": contactDetail.email },
         { "personalInfo.username": personalInfo.username },
       ],
@@ -229,34 +224,31 @@ router.post("/", adminAuth, async (req, res) => {
       contactDetail,
       accountSetup: {
         ...accountSetup,
-        transactionPinHash, // << REQUIRED BY SCHEMA
+        transactionPinHash, 
       },
       security: {
-        passwordHash,       // << REQUIRED BY SCHEMA
-        termsAcceptedAt: new Date(), // << REQUIRED BY SCHEMA
+        passwordHash,      
+        termsAcceptedAt: new Date(), 
       },
       createdBy,
     });
 
+    const generateAccountNumber = () =>
+      "4" + Math.floor(100000000 + Math.random() * 900000000); 
 
-    // AUTO-CREATE ACCOUNT WHEN USER IS CREATED
-const generateAccountNumber = () =>
-  "4" + Math.floor(100000000 + Math.random() * 900000000); // 9-digit bank number starting with 4
+    const generateAccountId = () =>
+      "ACCT-" + Date.now() + "-" + Math.floor(Math.random() * 10000);
 
-const generateAccountId = () =>
-  "ACCT-" + Date.now() + "-" + Math.floor(Math.random() * 10000);
-
-await Account.create({
-  user: user._id,
-  accountNumber: generateAccountNumber(),
-  accountId: generateAccountId(),
-  balances: {
-    usd: { available: 0, ledger: 0 },
-    usdt: { available: 0, ledger: 0 },
-    btc: { available: 0, ledger: 0 },
-  },
-});
-
+    await Account.create({
+      user: user._id,
+      accountNumber: generateAccountNumber(),
+      accountId: generateAccountId(),
+      balances: {
+        usd: { available: 0, ledger: 0 },
+        usdt: { available: 0, ledger: 0 },
+        btc: { available: 0, ledger: 0 },
+      },
+    });
 
     res.json({ success: true, user });
 
@@ -272,7 +264,6 @@ router.get("/:id", adminAuth, async (req, res) => {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    // Load the user's account
     const account = await Account.findOne({ user: user._id });
 
     res.json({ success: true, user, account });
@@ -282,18 +273,15 @@ router.get("/:id", adminAuth, async (req, res) => {
   }
 });
 
-
 /* -------- UPDATE (Modify User fields) -------- */
 router.put("/:id", adminAuth, async (req, res) => {
   try {
     const userId = req.params.id;
     const updates = req.body;
 
-    // Update user fields normally
     const user = await User.findByIdAndUpdate(userId, updates, { new: true });
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    // ⭐ If admin sends balance update, also update Account model
     if (updates.accountBalances) {
       const account = await Account.findOne({ user: userId });
 
@@ -325,11 +313,10 @@ router.put("/:id", adminAuth, async (req, res) => {
   }
 });
 
-
 /* -------- UPDATE STATUS (active/suspended) -------- */
 router.put("/:id/status", adminAuth, async (req, res) => {
   try {
-    const { status } = req.body; // "active" | "suspended"
+    const { status } = req.body; 
     const user = await User.findByIdAndUpdate(req.params.id, { status }, { new: true });
     if (!user) return res.status(404).json({ message: "User not found" });
     res.json({ success: true, user });
@@ -339,120 +326,20 @@ router.put("/:id/status", adminAuth, async (req, res) => {
   }
 });
 
-
-
-
-
-
-
 /* -------- DELETE -------- */
 router.delete("/:id", adminAuth, async (req, res) => {
   try {
     const user = await User.findByIdAndDelete(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
-    // optional: also delete user transactions
-    await Transaction.deleteMany({ userId: user._id });
+    
+    // ⭐ FIXED THIS TOO: Changed userId to user
+    await Transaction.deleteMany({ user: user._id });
+    
     res.json({ success: true, message: "User deleted" });
   } catch (e) {
     console.error("DELETE USER:", e);
     res.status(500).json({ message: "Server error" });
   }
 });
-
-/* -------- CREDIT / DEBIT (Admin adjust balance) --------
-   body: { action: "credit"|"debit", amount: number, reason?: string }
-------------------------------------------------------------------- */
-// router.post("/:id/wallet/adjust", adminAuth, async (req, res) => {
-//   try {
-//     const { action, amount, reason } = req.body;
-//     if (!["credit","debit"].includes(action)) return res.status(400).json({ message: "Invalid action" });
-//     if (!amount || amount <= 0) return res.status(400).json({ message: "Amount must be > 0" });
-
-//     const user = await User.findById(req.params.id);
-//     if (!user) return res.status(404).json({ message: "User not found" });
-
-//     const delta = action === "credit" ? amount : -amount;
-//     const newBalance = Number(user.balance || 0) + delta;
-//     if (newBalance < 0) return res.status(400).json({ message: "Insufficient balance for debit" });
-
-//     user.balance = newBalance;
-//     await user.save();
-
-//     await Transaction.create({
-//       userId: user._id,
-//       type: action === "credit" ? "deposit" : "withdraw",
-//       amount: Math.abs(amount),
-//       method: "admin",
-//       status: "completed",
-//       meta: { reason }
-//     });
-
-//     res.json({ success: true, balance: user.balance });
-//   } catch (e) {
-//     console.error("ADJUST WALLET:", e);
-//     res.status(500).json({ message: "Server error" });
-//   }
-// });
-// router.post("/:id/wallet/adjust", adminAuth, async (req, res) => {
-//   try {
-//     const { action, amount } = req.body;
-//     const userId = req.params.id;
-
-//     if (!["credit", "debit"].includes(action)) {
-//       return res.status(400).json({ success: false, message: "Invalid action" });
-//     }
-
-//     const user = await User.findById(userId);
-//     if (!user) {
-//       return res.status(404).json({ success: false, message: "User not found" });
-//     }
-
-//     // Update balance
-//     if (action === "credit") {
-//       user.balance += Number(amount);
-//     } else {
-//       if (user.balance < Number(amount)) {
-//         return res.status(400).json({
-//           success: false,
-//           message: "Insufficient balance",
-//         });
-//       }
-//       user.balance -= Number(amount);
-//     }
-
-//     await user.save();
-
-//     // ⭐ Create transaction that matches your schema ⭐
-//     // await Transaction.create({
-//     //   user: userId,
-//     //   amount: Number(amount),
-//     //   direction: action, // credit or debit
-
-//     //   // MUST USE VALID ENUM TYPE
-//     //   type: action === "credit" ? "deposit" : "transfer",
-
-//     //   status: "success", // valid enum
-//     //   description: `Admin ${action} of ${amount}`,
-//     // });
-//     await Transaction.create({
-//   user: userId,
-//   amount: Number(amount),
-//   direction: action, // credit or debit
-//   type: action === "credit" ? "deposit" : "transfer",
-//   status: "success",
-//   description: `Admin ${action} of ${amount}`,
-//   reference: generateReference(),
-// });
-
-
-//     res.json({ success: true, message: "Wallet updated", user });
-
-//   } catch (err) {
-//     console.error("ADJUST WALLET:", err);
-//     res.status(500).json({ success: false, error: err.message });
-//   }
-// });
-
-/* -------- USER TRANSACTION HISTORY (paginated) -------- */
 
 export default router;

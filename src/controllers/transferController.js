@@ -155,192 +155,176 @@ import Account from "../models/Account.js";
 import Transaction from "../models/Transaction.js";
 import { generateReference, calculateLocalFee, checkLimits } from "../utils/transfers.js";
 
-// OPTIONAL: verify by User collection (as you requested)
+// VERIFY BENEFICIARY
 export const verifyBeneficiary = async (req, res) => {
   try {
     const { accountNumber } = req.body;
-    const user = await User.findOne(
-      { accountNumber },
-      "personalInfo.legalFirstName personalInfo.middleName personalInfo.legalLastName"
-    );
-    if (!user) return res.status(404).json({ error: "Account not found" });
 
-    const fullName = [
-      user.personalInfo.legalFirstName,
-      user.personalInfo.middleName,
-      user.personalInfo.legalLastName
-    ].filter(Boolean).join(" ");
+    if (!accountNumber) {
+      return res.status(400).json({ error: "Account number is required" });
+    }
 
+    // 1. First, try to find the account number directly in the User collection
+    let user = await User.findOne({ accountNumber });
+
+    // 2. If it's NOT in the User collection, check the Account collection!
+    if (!user) {
+      // Find the account and 'populate' (fetch) the user attached to it
+      const account = await Account.findOne({ accountNumber }).populate("user");
+      
+      if (account && account.user) {
+        user = account.user; // We found the user!
+      }
+    }
+
+    // 3. If STILL not found, then the account truly doesn't exist
+    if (!user) {
+      return res.status(404).json({ error: "Account not found. Please check the number." });
+    }
+
+    // 4. Safely extract the user's name
+    let fullName = "Unknown User";
+    
+    if (user.personalInfo) {
+      fullName =[
+        user.personalInfo.legalFirstName,
+        user.personalInfo.middleName,
+        user.personalInfo.legalLastName
+      ].filter(Boolean).join(" ");
+      
+      // Fallback: If they don't have legal names set yet, use their username
+      if (!fullName.trim() && user.personalInfo.username) {
+        fullName = user.personalInfo.username;
+      }
+    }
+
+    // Return the verified name to the frontend!
     res.json({ success: true, name: fullName.trim() });
+
   } catch (e) {
     console.error("VERIFY BENEFICIARY ERROR:", e);
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: "Server error verifying account" });
   }
 };
 
-/**
- * Professional Local Transfer
- * - currency: USD (matches your balances.usd)
- * - validates PIN
- * - checks daily/monthly limits
- * - idempotency via header `Idempotency-Key`
- * - atomic with Mongo transactions
- * Body: { accountNumber, amount, pin, description }
- */
+// LOCAL TRANSFER
 export const localTransferPro = async (req, res) => {
-  const session = await mongoose.startSession();
   try {
     const userId = req.user.userId;
+    // We grab the variables from the frontend
     const { accountNumber, amount, pin, description = "" } = req.body;
-    const idemKey = req.header("Idempotency-Key");
 
-    // basic input
     if (!accountNumber || !amount || !pin) {
-      return res.status(400).json({ error: "accountNumber, amount, and pin are required" });
+      return res.status(400).json({ error: "Account number, amount, and PIN are required" });
     }
+
     const amt = Number(amount);
     if (!Number.isFinite(amt) || amt <= 0) {
       return res.status(400).json({ error: "Invalid amount" });
     }
 
-    // idempotency: if same idemKey was used and completed, return the previous receipt
-    if (idemKey) {
-      const existing = await Transaction.findOne({ idempotencyKey: idemKey, "sender.user": userId, status: "completed" });
-      if (existing) {
-        return res.json({
-          message: "Transfer successful (idempotent replay)",
-          receipt: {
-            reference: existing.reference,
-            amount: existing.amount,
-            fee: existing.fee,
-            currency: existing.currency,
-            toAccount: existing.receiver.accountNumber,
-            description: existing.description,
-            time: existing.createdAt,
-          }
-        });
-      }
-    }
-
-    // verify sender & PIN
+    // 1. Verify Sender User & PIN
     const senderUser = await User.findById(userId);
     if (!senderUser) return res.status(404).json({ error: "Sender not found" });
 
     const pinOK = await bcrypt.compare(pin, senderUser.accountSetup.transactionPinHash);
     if (!pinOK) return res.status(400).json({ error: "Incorrect transaction PIN" });
 
-    await session.withTransaction(async () => {
-      // load accounts within the session
-      const senderAcct = await Account.findOne({ user: userId }).session(session);
-      if (!senderAcct) throw new Error("Sender account not found");
+    // 2. Load Sender Account
+    const senderAcct = await Account.findOne({ user: userId });
+    if (!senderAcct) return res.status(404).json({ error: "Sender account not found" });
 
-      // Receiver lookup: by User collection since your accountNumber lives there
-      const receiverUser = await User.findOne({ accountNumber }).session(session);
-      if (!receiverUser) {
-        // fallback: try Account collection if you later add it there
-        throw new Error("Receiver not found");
+    // 3. BULLETPROOF RECEIVER LOOKUP (Removes spaces and checks both databases)
+    const cleanAccountNumber = String(accountNumber).trim();
+    
+    let receiverUser = await User.findOne({ accountNumber: cleanAccountNumber });
+    let receiverAcct = null;
+
+    if (!receiverUser) {
+      receiverAcct = await Account.findOne({ accountNumber: cleanAccountNumber });
+      if (receiverAcct) {
+        receiverUser = await User.findById(receiverAcct.user);
       }
-      if (receiverUser._id.equals(userId)) throw new Error("You cannot transfer to yourself");
+    } else {
+      receiverAcct = await Account.findOne({ user: receiverUser._id });
+    }
 
-      const receiverAcct = await Account.findOne({ user: receiverUser._id }).session(session);
-      if (!receiverAcct) throw new Error("Receiver account not found");
+    // 🚨 Detailed Error Messages so we know exactly what fails
+    if (!receiverUser) return res.status(404).json({ error: `User not found for account: ${cleanAccountNumber}` });
+    if (!receiverAcct) return res.status(404).json({ error: "Receiver's wallet data is missing." });
+    if (receiverUser._id.equals(userId)) return res.status(400).json({ error: "You cannot transfer money to yourself." });
 
-      // limits
-      const limitCheck = await checkLimits({ amount: amt, AccountModel: Account, TransactionModel: Transaction, userId, session });
-      if (!limitCheck.ok) throw new Error(limitCheck.reason);
+    // 4. Calculate Fee & Check Balance
+    const fee = typeof calculateLocalFee === 'function' ? calculateLocalFee(amt) : 0; 
+    const totalDebit = amt + fee;
 
-      // fee
-      const fee = calculateLocalFee(amt);
-      const totalDebit = amt + fee;
+    const senderAvail = Number(senderAcct.balances?.usd?.available || 0);
+    if (senderAvail < totalDebit) return res.status(400).json({ error: "Insufficient balance" });
 
-      // balance checks
-      const senderAvail = Number(senderAcct.balances?.usd?.available || 0);
-      const receiverAvail = Number(receiverAcct.balances?.usd?.available || 0);
-      if (senderAvail < totalDebit) throw new Error("Insufficient balance");
+    // 5. Apply Balance Changes
+    senderAcct.balances.usd.available -= totalDebit;
+    if (senderAcct.balances.usd.ledger !== undefined) senderAcct.balances.usd.ledger -= totalDebit;
 
-      // snapshots
-      const senderBefore = senderAvail;
-      const receiverBefore = receiverAvail;
+    receiverAcct.balances.usd.available += amt;
+    if (receiverAcct.balances.usd.ledger !== undefined) receiverAcct.balances.usd.ledger += amt;
 
-      // apply changes
-      senderAcct.balances.usd.available = senderAvail - totalDebit;
-      senderAcct.balances.usd.ledger = Number(senderAcct.balances.usd.ledger || senderBefore) - totalDebit;
+    // Save changes to database
+    await senderAcct.save();
+    await receiverAcct.save();
 
-      receiverAcct.balances.usd.available = receiverAvail + amt;
-      receiverAcct.balances.usd.ledger = Number(receiverAcct.balances.usd.ledger || receiverBefore) + amt;
+    const baseRef = generateReference();
 
-      await senderAcct.save({ session });
-      await receiverAcct.save({ session });
-
-      // create transaction record
-      const tx = await Transaction.create([{
-        type: "local_transfer",
-        status: "completed",
-        currency: "USD",
-        amount: amt,
-        fee,
-        reference: generateReference(),
-        idempotencyKey: idemKey,
-
-        sender: {
-          user: senderUser._id,
-          accountNumber: senderUser.accountNumber || senderAcct.accountNumber, // support both styles
-          balanceBefore: senderBefore,
-          balanceAfter: senderAcct.balances.usd.available,
-        },
-        receiver: {
-          user: receiverUser._id,
-          accountNumber: receiverUser.accountNumber || receiverAcct.accountNumber,
-          balanceBefore: receiverBefore,
-          balanceAfter: receiverAcct.balances.usd.available,
-        },
-
-        description,
-        initiatedBy: senderUser._id,
-      }], { session });
-
-      const saved = tx[0];
-
-      // TODO (optional): enqueue notifications
-      // await Notifications.enqueue({ ... })
-
-      // respond
-      res.json({
-        message: "Transfer successful",
-        receipt: {
-          reference: saved.reference,
-          amount: saved.amount,
-          fee: saved.fee,
-          currency: saved.currency,
-          toAccount: saved.receiver.accountNumber,
-          toName: `${receiverUser.personalInfo?.legalFirstName || ""} ${receiverUser.personalInfo?.legalLastName || ""}`.trim(),
-          description: saved.description,
-          time: saved.createdAt,
-          balances: {
-            senderAfter: saved.sender.balanceAfter,
-            receiverAfter: saved.receiver.balanceAfter
-          }
-        }
-      });
+    // 6. CREATE SENDER TRANSACTION (Debit)
+    await Transaction.create({
+      user: userId,
+      type: "transfer",
+      direction: "debit",
+      amount: totalDebit,
+      status: "success",  
+      reference: `${baseRef}-D`, 
+      description: `Local Transfer to ${receiverUser.personalInfo.legalFirstName} ${receiverUser.personalInfo.legalLastName}`
     });
+
+    // 7. CREATE RECEIVER TRANSACTION (Credit)
+    await Transaction.create({
+      user: receiverUser._id,
+      type: "transfer",
+      direction: "credit",
+      amount: amt, 
+      status: "success",
+      reference: `${baseRef}-C`, 
+      description: `Local Transfer from ${senderUser.personalInfo.legalFirstName} ${senderUser.personalInfo.legalLastName}`
+    });
+
+    // 8. Send Success Response to Frontend
+    res.json({
+      success: true,
+      message: "Transfer successful",
+      receipt: {
+        reference: baseRef,
+        amount: amt,
+        fee: fee,
+        toAccount: cleanAccountNumber,
+        toName: `${receiverUser.personalInfo.legalFirstName} ${receiverUser.personalInfo.legalLastName}`
+      }
+    });
+
   } catch (e) {
-    console.error("LOCAL TRANSFER PRO ERROR:", e);
-    // return friendly error
-    res.status(400).json({ error: e.message });
-  } finally {
-    session.endSession();
+    console.error("LOCAL TRANSFER ERROR:", e);
+    res.status(500).json({ error: e.message || "Server error processing transfer" });
   }
 };
 
-/** optional: simple history endpoint */
+// LIST TRANSFERS
 export const listTransfers = async (req, res) => {
   try {
     const userId = req.user.userId;
-    const txs = await Transaction.find({ "sender.user": userId })
+    // Look for transactions belonging to this user
+    const txs = await Transaction.find({ user: userId })
       .sort({ createdAt: -1 })
       .limit(50);
-    res.json({ transactions: txs });
+    res.json({ success: true, transactions: txs });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ success: false, error: e.message });
   }
 };
